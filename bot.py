@@ -86,6 +86,7 @@ def generate_reply(prompt, prompt_language, use_google_ai=True):
         lang_prompt = generate_language_specific_prompt(prompt, prompt_language)
         if lang_prompt is None:
             return None
+        ai_role = "Kamu adalah anggota member discord dengan username newbwebthree, kamu memahami dunia blockchain, crypto dan web3. kamu antusias dengan projek apapun di channel kamu berada saat ini, berikan tanggapan yang positif dan bersahabat walaupun kamu kadang typo sedikit namun jarang. kadang juga kamu merespon dengan jokes umum di web3 tapi jangan terlalu sering"
         ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa sehari hari manusia."
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
