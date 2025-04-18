@@ -146,6 +146,55 @@ def get_bot_info(token):
         log_message(f"Gagal mengambil info akun bot: {e}", "ERROR")
         return "Unknown", "", "Unknown"
 
+def is_valid_text_message(message_content):
+    # Function to check if a message contains only valid text content
+    # Filter out messages that contain links or are primarily emojis
+    
+    # Skip empty messages
+    if not message_content or not message_content.strip():
+        return False
+    
+    # Filter out URLs
+    url_pattern = r'https?://\S+|www\.\S+'
+    if re.search(url_pattern, message_content):
+        return False
+    
+    # Filter out messages that are primarily emoji
+    # This regex attempts to match common Unicode emoji patterns
+    emoji_pattern = re.compile(
+        "["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F700-\U0001F77F"  # alchemical symbols
+        u"\U0001F780-\U0001F7FF"  # Geometric Shapes
+        u"\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+        u"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        u"\U0001FA00-\U0001FA6F"  # Chess Symbols
+        u"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        u"\U00002702-\U000027B0"  # Dingbats
+        u"\U000024C2-\U0001F251" 
+        "]+", flags=re.UNICODE)
+    
+    # Count emojis in the message
+    emoji_count = len(emoji_pattern.findall(message_content))
+    text_length = len(message_content)
+    
+    # If more than 30% of the message is emojis, skip it
+    if text_length > 0 and emoji_count / text_length > 0.3:
+        return False
+    
+    # Filter out Discord emoji format like <:emoji_name:id>
+    discord_emoji_pattern = r'<a?:[a-zA-Z0-9_]+:[0-9]+>'
+    if re.search(discord_emoji_pattern, message_content):
+        return False
+    
+    # Make sure the message has actual words (at least a few characters that aren't just symbols)
+    if not re.search(r'[a-zA-Z0-9]{3,}', message_content):
+        return False
+    
+    return True
+
 def auto_reply(channel_id, settings, token):
     headers = {'Authorization': token}
     if settings["use_google_ai"]:
@@ -174,8 +223,8 @@ def auto_reply(channel_id, settings, token):
                     if author_id != bot_user_id and message_type != 8 and message_id not in processed_message_ids:
                         user_message = most_recent_message.get('content', '').strip()
                         attachments = most_recent_message.get('attachments', [])
-                        if attachments or not re.search(r'\w', user_message):
-                            log_message(f"[Channel {channel_id}] Pesan tidak diproses (bukan teks murni).", "WARNING")
+                        if attachments or not is_valid_text_message(user_message):
+                            log_message(f"[Channel {channel_id}] Pesan dilewati (bukan teks murni atau mengandung link/emoji).", "WARNING")
                         else:
                             log_message(f"[Channel {channel_id}] Received: {user_message}", "INFO")
                             if settings["use_slow_mode"]:
@@ -324,7 +373,6 @@ def get_server_settings(channel_id, channel_name):
     }
 
 if __name__ == "__main__":
-
     bot_accounts = {}
     for token in discord_tokens:
         username, discriminator, bot_id = get_bot_info(token)
