@@ -195,6 +195,32 @@ def is_valid_text_message(message_content):
     
     return True
 
+def is_standalone_message(message_data):
+    """
+    Check if message is a standalone message (not a reply and doesn't mention users)
+    Returns True if the message is standalone, False otherwise
+    """
+    # Check if message is a reply
+    if message_data.get('referenced_message') is not None:
+        return False
+    
+    # Check if message mentions other users
+    mentions = message_data.get('mentions', [])
+    if mentions:
+        return False
+    
+    # Check for user mentions in the format <@USER_ID> or <@!USER_ID>
+    content = message_data.get('content', '')
+    mention_pattern = r'<@!?[0-9]+>'
+    if re.search(mention_pattern, content):
+        return False
+    
+    # Additional check for message_reference
+    if message_data.get('message_reference') is not None:
+        return False
+    
+    return True
+
 def auto_reply(channel_id, settings, token):
     headers = {'Authorization': token}
     if settings["use_google_ai"]:
@@ -220,11 +246,20 @@ def auto_reply(channel_id, settings, token):
                     message_id = most_recent_message.get('id')
                     author_id = most_recent_message.get('author', {}).get('id')
                     message_type = most_recent_message.get('type', '')
+                    
                     if author_id != bot_user_id and message_type != 8 and message_id not in processed_message_ids:
+                        # Check if message is standalone (not a reply and doesn't mention users)
+                        if not is_standalone_message(most_recent_message):
+                            log_message(f"[Channel {channel_id}] Pesan dilewati (bukan pesan standalone).", "WARNING")
+                            processed_message_ids.add(message_id)
+                            continue
+                        
                         user_message = most_recent_message.get('content', '').strip()
                         attachments = most_recent_message.get('attachments', [])
+                        
                         if attachments or not is_valid_text_message(user_message):
                             log_message(f"[Channel {channel_id}] Pesan dilewati (bukan teks murni atau mengandung link/emoji).", "WARNING")
+                            processed_message_ids.add(message_id)
                         else:
                             log_message(f"[Channel {channel_id}] Received: {user_message}", "INFO")
                             if settings["use_slow_mode"]:
