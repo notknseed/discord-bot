@@ -195,30 +195,59 @@ def is_valid_text_message(message_content):
     
     return True
 
-def is_standalone_message(message_data):
+def should_process_message(message_data, bot_user_id):
     """
-    Check if message is a standalone message (not a reply and doesn't mention users)
-    Returns True if the message is standalone, False otherwise
+    Determines if a message should be processed based on comprehensive criteria:
+    - Ignores the bot's own messages
+    - Processes standalone messages with no mentions
+    - Processes replies to the bot's messages (for conversations)
+    - Ignores replies to other users' messages
+    - Ignores messages with mentions (except when replying to the bot)
+    
+    Returns True if the message should be processed, False otherwise
     """
+    # Skip bot's own messages
+    author_id = message_data.get('author', {}).get('id')
+    if author_id == bot_user_id:
+        return False
+    
     # Check if message is a reply
-    if message_data.get('referenced_message') is not None:
+    referenced_message = message_data.get('referenced_message')
+    message_reference = message_data.get('message_reference')
+    
+    # If it's a reply, check if it's replying to the bot
+    if referenced_message is not None or message_reference is not None:
+        # If we have the full referenced message object
+        if referenced_message is not None:
+            ref_author_id = referenced_message.get('author', {}).get('id')
+            # Only process if it's replying to our bot
+            return ref_author_id == bot_user_id
+        
+        # If we only have message_reference but not the full referenced message
+        # We can't determine who it's replying to, so let's skip to be safe
         return False
     
-    # Check if message mentions other users
-    mentions = message_data.get('mentions', [])
-    if mentions:
-        return False
-    
-    # Check for user mentions in the format <@USER_ID> or <@!USER_ID>
+    # Check for mentions in the message content
     content = message_data.get('content', '')
     mention_pattern = r'<@!?[0-9]+>'
     if re.search(mention_pattern, content):
+        # Check if the only mention is to our bot
+        mentions = re.findall(mention_pattern, content)
+        if len(mentions) == 1:
+            # Extract the user ID from the mention
+            mention_id = re.sub(r'[<@!>]', '', mentions[0])
+            return mention_id == bot_user_id
         return False
     
-    # Additional check for message_reference
-    if message_data.get('message_reference') is not None:
+    # Check for mentions array in the message
+    mentions = message_data.get('mentions', [])
+    if mentions:
+        # If there's only one mention and it's our bot
+        if len(mentions) == 1 and mentions[0].get('id') == bot_user_id:
+            return True
         return False
     
+    # If it's a standalone message with no mentions, process it
     return True
 
 def auto_reply(channel_id, settings, token):
@@ -244,13 +273,12 @@ def auto_reply(channel_id, settings, token):
                 if messages:
                     most_recent_message = messages[0]
                     message_id = most_recent_message.get('id')
-                    author_id = most_recent_message.get('author', {}).get('id')
                     message_type = most_recent_message.get('type', '')
                     
-                    if author_id != bot_user_id and message_type != 8 and message_id not in processed_message_ids:
-                        # Check if message is standalone (not a reply and doesn't mention users)
-                        if not is_standalone_message(most_recent_message):
-                            log_message(f"[Channel {channel_id}] Pesan dilewati (bukan pesan standalone).", "WARNING")
+                    if message_type != 8 and message_id not in processed_message_ids:
+                        # Use the new function instead of is_standalone_message
+                        if not should_process_message(most_recent_message, bot_user_id):
+                            log_message(f"[Channel {channel_id}] Pesan dilewati (tidak memenuhi kriteria).", "WARNING")
                             processed_message_ids.add(message_id)
                             continue
                         
