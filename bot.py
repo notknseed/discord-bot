@@ -1,4 +1,3 @@
-import shareithub
 import json
 import threading
 import time
@@ -6,7 +5,6 @@ import os
 import random
 import re
 import requests
-from shareithub import shareithub
 from dotenv import load_dotenv
 from datetime import datetime
 from colorama import init, Fore, Style
@@ -70,24 +68,27 @@ def get_random_message_from_file():
     except FileNotFoundError:
         return "File pesan.txt tidak ditemukan!"
 
-def generate_language_specific_prompt(user_message, prompt_language):
+def generate_language_specific_prompt(user_message, prompt_language, persona=None):
+    persona_prefix = ""
+    if persona:
+        persona_prefix = f"You are {persona}. Always stay in character. "
+    
     if prompt_language == 'id':
-        return f"Balas pesan berikut dalam bahasa Indonesia: {user_message}"
+        return f"{persona_prefix}Balas pesan berikut dalam bahasa Indonesia: {user_message}"
     elif prompt_language == 'en':
-        return f"Reply to the following message in English: {user_message}"
+        return f"{persona_prefix}Reply to the following message in English: {user_message}"
     else:
         log_message(f"Bahasa prompt '{prompt_language}' tidak valid. Pesan dilewati.", "WARNING")
         return None
 
-def generate_reply(prompt, prompt_language, use_google_ai=True):
+def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None):
     global last_generated_text
     if use_google_ai:
         google_api_key = get_random_api_key()
-        lang_prompt = generate_language_specific_prompt(prompt, prompt_language)
+        lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona)
         if lang_prompt is None:
             return None
-        ai_role = "Kamu adalah anggota member discord dengan username newbwebthree, kamu memahami dunia blockchain, crypto dan web3. kamu antusias dengan projek apapun di channel kamu berada saat ini, berikan tanggapan yang positif dan bersahabat walaupun kamu kadang typo sedikit namun jarang. kadang juga kamu merespon dengan jokes umum di web3 tapi jangan terlalu sering"
-        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa sehari hari manusia. jika ada yang bertanya waktu bilang saja jam random. Jika ada yang bertanya asalmu, bilang kamu dari Lampung, Indonesia. Jika ada yang menanyakan lebih spesifik alihkan pembicaraan."
+        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1-2 kalimat menggunakan bahasa kasual chatting discord."
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
         data = {'contents': [{'parts': [{'text': ai_prompt}]}]}
@@ -97,7 +98,7 @@ def generate_reply(prompt, prompt_language, use_google_ai=True):
                 if response.status_code == 429:
                     log_message(f"API key {google_api_key} terkena rate limit (429). Menggunakan API key lain...", "WARNING")
                     used_api_keys.add(google_api_key)
-                    return generate_reply(prompt, prompt_language, use_google_ai)
+                    return generate_reply(prompt, prompt_language, use_google_ai, persona)
                 response.raise_for_status()
                 result = response.json()
                 generated_text = result['candidates'][0]['content']['parts'][0]['text']
@@ -305,7 +306,7 @@ def auto_reply(channel_id, settings, token):
                 prompt = None
 
             if prompt:
-                result = generate_reply(prompt, settings["prompt_language"], settings["use_google_ai"])
+                result = generate_reply(prompt, settings["prompt_language"], settings["use_google_ai"], settings.get("persona"))
                 if result is None:
                     log_message(f"[Channel {channel_id}] Bahasa prompt tidak valid. Pesan dilewati.", "WARNING")
                 else:
@@ -396,7 +397,12 @@ def get_server_settings(channel_id, channel_name):
     print(f"\nMasukkan pengaturan untuk channel {channel_id} (Nama Channel: {channel_name}):")
     use_google_ai = input("  Gunakan Google Gemini AI? (y/n): ").strip().lower() == 'y'
     
+    persona = None
     if use_google_ai:
+        use_persona = input("  Gunakan persona khusus? (y/n): ").strip().lower() == 'y'
+        if use_persona:
+            persona = input("  Masukkan deskripsi persona (contoh: 'a helpful assistant', 'a medieval knight', etc): ").strip()
+            
         prompt_language = input("  Pilih bahasa prompt (en/id): ").strip().lower()
         if prompt_language not in ["en", "id"]:
             print("  Input tidak valid. Default ke 'id'.")
@@ -433,7 +439,8 @@ def get_server_settings(channel_id, channel_name):
         "use_slow_mode": use_slow_mode,
         "use_reply": use_reply,
         "delete_bot_reply": delete_bot_reply,
-        "delete_immediately": delete_immediately
+        "delete_immediately": delete_immediately,
+        "persona": persona  # Add the persona to the settings
     }
 
 if __name__ == "__main__":
@@ -462,9 +469,11 @@ if __name__ == "__main__":
         info = channel_infos.get(cid, {"server_name": "Unknown Server", "channel_name": "Unknown Channel"})
         hapus_str = ("Langsung" if settings['delete_immediately'] else 
                      (f"Dalam {settings['delete_bot_reply']} detik" if settings['delete_bot_reply'] and settings['delete_bot_reply'] > 0 else "Tidak"))
+        persona_str = f"Persona = {settings.get('persona', 'Tidak ada')}, " if settings.get('persona') else ""
         log_message(
             f"[Channel {cid} | Server: {info['server_name']} | Channel: {info['channel_name']}] "
             f"Pengaturan: Gemini AI = {'Aktif' if settings['use_google_ai'] else 'Tidak'}, "
+            f"{persona_str}"
             f"Bahasa = {settings['prompt_language'].upper()}, "
             f"Membaca Pesan = {'Aktif' if settings['enable_read_message'] else 'Tidak'}, "
             f"Delay Membaca = {settings['read_delay']} detik, "
