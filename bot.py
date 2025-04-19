@@ -81,14 +81,64 @@ def generate_language_specific_prompt(user_message, prompt_language, persona=Non
         log_message(f"Bahasa prompt '{prompt_language}' tidak valid. Pesan dilewati.", "WARNING")
         return None
 
+def is_time_question(message):
+    # List of patterns that indicate the user is asking for the time
+    time_patterns = [
+        "what time", "what's the time", "what is the time", 
+        "current time", "time now", "time is it",
+        "got the time", "tell me the time",
+        "jam berapa", "sekarang jam", "waktu sekarang"
+    ]
+    return any(pattern in message.lower() for pattern in time_patterns)
+
+def generate_random_time_response(prompt_language, persona=None):
+    # Generate a random hour and minute
+    random_hour = random.randint(1, 12)
+    random_minute = random.randint(0, 59)
+    am_pm = random.choice(["AM", "PM"])
+    random_time = f"{random_hour}:{random_minute:02d} {am_pm}"
+    
+    if persona:
+        # If there's a persona, send the time info to the AI to format it in character
+        google_api_key = get_random_api_key()
+        
+        if prompt_language == 'id':
+            special_prompt = f"You are {persona}. Seseorang bertanya jam berapa sekarang. Katakan bahwa sekarang jam {random_time}. Jawab dengan gaya khas karaktermu dengan 1 kalimat."
+        else:
+            special_prompt = f"You are {persona}. Someone asked what time it is. Tell them it's {random_time} now. Answer in your character's style with 1 sentence."
+            
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
+        headers = {'Content-Type': 'application/json'}
+        data = {'contents': [{'parts': [{'text': special_prompt}]}]}
+        
+        try:
+            response = requests.post(url, headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+            return result['candidates'][0]['content']['parts'][0]['text']
+        except requests.exceptions.RequestException as e:
+            log_message(f"Error generating time response: {e}", "ERROR")
+    
+    # Fallback if persona processing fails or if no persona is specified
+    if prompt_language == 'id':
+        return f"Sekarang jam {random_time}."
+    else:
+        return f"It's {random_time}."
+
 def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None):
     global last_generated_text
+    
+    # Check if it's a time-related question
+    if use_google_ai and is_time_question(prompt):
+        log_message(f"Detected time question: \"{prompt}\". Generating random time response.", "INFO")
+        return generate_random_time_response(prompt_language, persona)
+    
     if use_google_ai:
         google_api_key = get_random_api_key()
         lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona)
         if lang_prompt is None:
             return None
-        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1-2 kalimat menggunakan bahasa kasual chatting discord."
+        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa sehari hari manusia."
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
         data = {'contents': [{'parts': [{'text': ai_prompt}]}]}
