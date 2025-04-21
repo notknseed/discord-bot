@@ -214,7 +214,7 @@ def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None, co
         lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona, conversation_history)
         if lang_prompt is None:
             return None
-        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa kasual chatting di discord tanpa huruf kapital"
+        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa kasual chatting di discord tanpa huruf kapital dan jangan selalu pakai emoticon"
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
         data = {'contents': [{'parts': [{'text': ai_prompt}]}]}
@@ -530,6 +530,16 @@ def get_slow_mode_delay(channel_id, token):
         log_message(f"[Channel {channel_id}] Gagal mengambil informasi slow mode: {e}", "ERROR")
         return 5
 
+def start_cleanup_thread():
+    def periodic_cleanup():
+        while True:
+            time.sleep(3600)  # Run cleanup every hour
+            cleanup_expired_conversations()
+            log_message("Cleaned up expired conversations", "INFO")
+    
+    cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+    cleanup_thread.start()
+
 def get_server_settings(channel_id, channel_name):
     print(f"\nMasukkan pengaturan untuk channel {channel_id} (Nama Channel: {channel_name}):")
     use_google_ai = input("  Gunakan Google Gemini AI? (y/n): ").strip().lower() == 'y'
@@ -580,12 +590,67 @@ def get_server_settings(channel_id, channel_name):
         "persona": persona  # Add the persona to the settings
     }
 
-def start_cleanup_thread():
-    def periodic_cleanup():
-        while True:
-            time.sleep(3600)  # Run cleanup every hour
-            cleanup_expired_conversations()
-            log_message("Cleaned up expired conversations", "INFO")
+if __name__ == "__main__":
+    bot_accounts = {}
+    for token in discord_tokens:
+        username, discriminator, bot_id = get_bot_info(token)
+        bot_accounts[token] = {"username": username, "discriminator": discriminator, "bot_id": bot_id}
+        log_message(f"Akun Bot: {username}#{discriminator} (ID: {bot_id})", "SUCCESS")
+
+    # Input channel IDs dari user
+    channel_ids = [cid.strip() for cid in input("Masukkan ID channel (pisahkan dengan koma jika lebih dari satu): ").split(",") if cid.strip()]
+
+    token = discord_tokens[0]
+    channel_infos = {}
+    for channel_id in channel_ids:
+        server_name, channel_name = get_channel_info(channel_id, token)
+        channel_infos[channel_id] = {"server_name": server_name, "channel_name": channel_name}
+        log_message(f"[Channel {channel_id}] Terhubung ke server: {server_name} | Nama Channel: {channel_name}", "SUCCESS")
+
+    server_settings = {}
+    for channel_id in channel_ids:
+        channel_name = channel_infos.get(channel_id, {}).get("channel_name", "Unknown Channel")
+        server_settings[channel_id] = get_server_settings(channel_id, channel_name)
+
+    for cid, settings in server_settings.items():
+        info = channel_infos.get(cid, {"server_name": "Unknown Server", "channel_name": "Unknown Channel"})
+        hapus_str = ("Langsung" if settings['delete_immediately'] else 
+                     (f"Dalam {settings['delete_bot_reply']} detik" if settings['delete_bot_reply'] and settings['delete_bot_reply'] > 0 else "Tidak"))
+        persona_str = f"Persona = {settings.get('persona', 'Tidak ada')}, " if settings.get('persona') else ""
+        log_message(
+            f"[Channel {cid} | Server: {info['server_name']} | Channel: {info['channel_name']}] "
+            f"Pengaturan: Gemini AI = {'Aktif' if settings['use_google_ai'] else 'Tidak'}, "
+            f"{persona_str}"
+            f"Bahasa = {settings['prompt_language'].upper()}, "
+            f"Membaca Pesan = {'Aktif' if settings['enable_read_message'] else 'Tidak'}, "
+            f"Delay Membaca = {settings['read_delay']} detik, "
+            f"Interval = {settings['delay_interval']} detik, "
+            f"Slow Mode = {'Aktif' if settings['use_slow_mode'] else 'Tidak'}, "
+            f"Reply = {'Ya' if settings['use_reply'] else 'Tidak'}, "
+            f"Hapus Pesan = {hapus_str}",
+            "INFO"
+        )
+
+    # Start the conversation cleanup thread
+    start_cleanup_thread()
+    log_message("Started conversation cleanup thread to manage memory", "SUCCESS")
     
-    cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
-    cleanup_thread.start()
+    # Print the conversation memory settings
+    log_message(f"Conversation memory settings: Max length = {max_conversation_length}, Expiry = {conversation_expiry/60} minutes", "INFO")
+
+    token_index = 0
+    for channel_id in channel_ids:
+        token = discord_tokens[token_index % len(discord_tokens)]
+        token_index += 1
+        bot_info = bot_accounts.get(token, {"username": "Unknown", "discriminator": "", "bot_id": "Unknown"})
+        thread = threading.Thread(
+            target=auto_reply,
+            args=(channel_id, server_settings[channel_id], token)
+        )
+        thread.daemon = True
+        thread.start()
+        log_message(f"[Channel {channel_id}] Bot aktif: {bot_info['username']}#{bot_info['discriminator']} (Token: {token[:4]}{'...' if len(token) > 4 else token})", "SUCCESS")
+
+    log_message("Bot sedang berjalan di beberapa server... Tekan CTRL+C untuk menghentikan.", "INFO")
+    while True:
+        time.sleep(10)
