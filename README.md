@@ -25,11 +25,13 @@
 
 9. Auto read new chat in server
 
-10. Create persona to the bot (customized)
+# ADDED FROM ORIGINAL:
 
-11. Remember chat history, 7 chats max for conversational context (customized)
+10. Create persona to the bot
 
-12. Answers random time when asked time-related questions (customized)
+11. Remember chat history, 7 chats max for conversational context
+
+12. Answers random time when asked time-related questions 
 
 
 # HOW TO USE ?
