@@ -55,9 +55,10 @@ Edit file `.env` copy & paste your Gemini API & Discord token :
 nano .env
 ```
 
- U CAN RUN BOT
- 
- `python3 bot.py` 
+U CAN RUN BOT
+```
+python3 bot.py
+``` 
 
 
 # Copy & Paste in console browser to get TOKEN DISCORD :
