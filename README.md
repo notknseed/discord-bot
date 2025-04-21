@@ -25,6 +25,12 @@
 
 9. Auto read new chat in server
 
+10. Create persona to the bot (customized)
+
+11. Remember chat history, 7 chats max for conversational context (customized)
+
+12. Answers random time when asked time-related questions (customized)
+
 
 # HOW TO USE ?
 
@@ -49,7 +55,9 @@ Edit file `.env` copy & paste your Gemini API & Discord token :
 nano .env
 ```
 
-## DONE. U CAN RUN BOT `python3 bot.py` 
+ U CAN RUN BOT
+ 
+ `python3 bot.py` 
 
 
 # Copy & Paste in console browser to get TOKEN DISCORD :
