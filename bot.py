@@ -71,7 +71,7 @@ def get_random_message_from_file():
 def generate_language_specific_prompt(user_message, prompt_language, persona=None):
     persona_prefix = ""
     if persona:
-        persona_prefix = f"You are {persona}. Always stay in character. "
+        persona_prefix = f"You are {persona}. Remember this character, but you show this character only if being asked. "
     
     if prompt_language == 'id':
         return f"{persona_prefix}Balas pesan berikut dalam bahasa Indonesia: {user_message}"
@@ -138,7 +138,7 @@ def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None):
         lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona)
         if lang_prompt is None:
             return None
-        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa sehari hari manusia."
+        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa kasual chatting di discord tanpa huruf kapital"
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
         data = {'contents': [{'parts': [{'text': ai_prompt}]}]}
