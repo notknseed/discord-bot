@@ -31,6 +31,11 @@ used_api_keys = set()
 last_generated_text = None
 cooldown_time = 86400
 
+# Conversation memory settings
+user_conversations = {}  # To store conversation history by user ID
+conversation_expiry = 3600  # Conversation expires after 1 hour of inactivity
+max_conversation_length = 7  # Maximum number of previous exchanges to remember
+
 def log_message(message, level="INFO"):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -51,6 +56,67 @@ def log_message(message, level="INFO"):
     print(formatted_message)
     print(border)
 
+def update_conversation_history(user_id, channel_id, user_message, bot_response):
+    # Create a unique key for each user in each channel
+    conversation_key = f"{user_id}:{channel_id}"
+    
+    # Get current timestamp
+    current_time = time.time()
+    
+    # Create or update conversation entry
+    if conversation_key not in user_conversations:
+        user_conversations[conversation_key] = {
+            "exchanges": [],
+            "last_update": current_time
+        }
+    
+    # Add the new exchange
+    user_conversations[conversation_key]["exchanges"].append({
+        "user": user_message,
+        "bot": bot_response,
+        "timestamp": current_time
+    })
+    
+    # Update the timestamp
+    user_conversations[conversation_key]["last_update"] = current_time
+    
+    # Trim conversation if it exceeds the maximum length
+    if len(user_conversations[conversation_key]["exchanges"]) > max_conversation_length:
+        user_conversations[conversation_key]["exchanges"] = user_conversations[conversation_key]["exchanges"][-max_conversation_length:]
+    
+    log_message(f"Updated conversation history for user {user_id} in channel {channel_id}. Total exchanges: {len(user_conversations[conversation_key]['exchanges'])}", "INFO")
+
+def get_conversation_history(user_id, channel_id):
+    conversation_key = f"{user_id}:{channel_id}"
+    
+    # If no conversation exists or it's expired, return empty
+    if conversation_key not in user_conversations:
+        return []
+    
+    # Check if conversation has expired
+    current_time = time.time()
+    if current_time - user_conversations[conversation_key]["last_update"] > conversation_expiry:
+        # Conversation expired, remove it
+        del user_conversations[conversation_key]
+        log_message(f"Expired conversation removed for user {user_id} in channel {channel_id}", "INFO")
+        return []
+    
+    return user_conversations[conversation_key]["exchanges"]
+
+def cleanup_expired_conversations():
+    current_time = time.time()
+    keys_to_remove = []
+    
+    for key, conversation in user_conversations.items():
+        if current_time - conversation["last_update"] > conversation_expiry:
+            keys_to_remove.append(key)
+    
+    for key in keys_to_remove:
+        del user_conversations[key]
+    
+    if keys_to_remove:
+        log_message(f"Cleaned up {len(keys_to_remove)} expired conversations", "INFO")
+
 def get_random_api_key():
     available_keys = [key for key in google_api_keys if key not in used_api_keys]
     if not available_keys:
@@ -68,15 +134,25 @@ def get_random_message_from_file():
     except FileNotFoundError:
         return "File pesan.txt tidak ditemukan!"
 
-def generate_language_specific_prompt(user_message, prompt_language, persona=None):
+def generate_language_specific_prompt(user_message, prompt_language, persona=None, conversation_history=None):
     persona_prefix = ""
     if persona:
         persona_prefix = f"You are {persona}. Remember this character, but you show this character only if being asked. "
     
+    history_text = ""
+    if conversation_history and len(conversation_history) > 0:
+        history_text = "Here's our conversation history (most recent last):\n"
+        for exchange in conversation_history:
+            if prompt_language == 'id':
+                history_text += f"User: {exchange['user']}\nYou: {exchange['bot']}\n"
+            else:
+                history_text += f"User: {exchange['user']}\nYou: {exchange['bot']}\n"
+        history_text += "\nRemember this context when replying. Keep your response conversational and natural.\n"
+    
     if prompt_language == 'id':
-        return f"{persona_prefix}Balas pesan berikut dalam bahasa Indonesia: {user_message}"
+        return f"{persona_prefix}{history_text}Balas pesan berikut dalam bahasa Indonesia, dengan mempertahankan konteks percakapan sebelumnya: {user_message}"
     elif prompt_language == 'en':
-        return f"{persona_prefix}Reply to the following message in English: {user_message}"
+        return f"{persona_prefix}{history_text}Reply to the following message in English, maintaining the context of our previous conversation: {user_message}"
     else:
         log_message(f"Bahasa prompt '{prompt_language}' tidak valid. Pesan dilewati.", "WARNING")
         return None
@@ -125,7 +201,7 @@ def generate_random_time_response(prompt_language, persona=None):
     else:
         return f"It's {random_time}."
 
-def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None):
+def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None, conversation_history=None):
     global last_generated_text
     
     # Check if it's a time-related question
@@ -135,7 +211,7 @@ def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None):
     
     if use_google_ai:
         google_api_key = get_random_api_key()
-        lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona)
+        lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona, conversation_history)
         if lang_prompt is None:
             return None
         ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa kasual chatting di discord tanpa huruf kapital"
@@ -148,7 +224,7 @@ def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None):
                 if response.status_code == 429:
                     log_message(f"API key {google_api_key} terkena rate limit (429). Menggunakan API key lain...", "WARNING")
                     used_api_keys.add(google_api_key)
-                    return generate_reply(prompt, prompt_language, use_google_ai, persona)
+                    return generate_reply(prompt, prompt_language, use_google_ai, persona, conversation_history)
                 response.raise_for_status()
                 result = response.json()
                 generated_text = result['candidates'][0]['content']['parts'][0]['text']
@@ -356,7 +432,15 @@ def auto_reply(channel_id, settings, token):
                 prompt = None
 
             if prompt:
-                result = generate_reply(prompt, settings["prompt_language"], settings["use_google_ai"], settings.get("persona"))
+                # Get the user ID from the message
+                user_id = most_recent_message.get('author', {}).get('id')
+                
+                # Get conversation history for this user
+                conversation_history = get_conversation_history(user_id, channel_id)
+                
+                # Generate reply with conversation history
+                result = generate_reply(prompt, settings["prompt_language"], settings["use_google_ai"], settings.get("persona"), conversation_history)
+                
                 if result is None:
                     log_message(f"[Channel {channel_id}] Bahasa prompt tidak valid. Pesan dilewati.", "WARNING")
                 else:
@@ -370,6 +454,9 @@ def auto_reply(channel_id, settings, token):
                         else:
                             send_message(channel_id, response_text, token, 
                                          delete_after=settings["delete_bot_reply"], delete_immediately=settings["delete_immediately"])
+                        
+                        # Update conversation history after successful reply
+                        update_conversation_history(user_id, channel_id, prompt, response_text)
             else:
                 log_message(f"[Channel {channel_id}] Tidak ada pesan baru atau pesan tidak valid.", "INFO")
 
@@ -493,60 +580,12 @@ def get_server_settings(channel_id, channel_name):
         "persona": persona  # Add the persona to the settings
     }
 
-if __name__ == "__main__":
-    bot_accounts = {}
-    for token in discord_tokens:
-        username, discriminator, bot_id = get_bot_info(token)
-        bot_accounts[token] = {"username": username, "discriminator": discriminator, "bot_id": bot_id}
-        log_message(f"Akun Bot: {username}#{discriminator} (ID: {bot_id})", "SUCCESS")
-
-    # Input channel IDs dari user
-    channel_ids = [cid.strip() for cid in input("Masukkan ID channel (pisahkan dengan koma jika lebih dari satu): ").split(",") if cid.strip()]
-
-    token = discord_tokens[0]
-    channel_infos = {}
-    for channel_id in channel_ids:
-        server_name, channel_name = get_channel_info(channel_id, token)
-        channel_infos[channel_id] = {"server_name": server_name, "channel_name": channel_name}
-        log_message(f"[Channel {channel_id}] Terhubung ke server: {server_name} | Nama Channel: {channel_name}", "SUCCESS")
-
-    server_settings = {}
-    for channel_id in channel_ids:
-        channel_name = channel_infos.get(channel_id, {}).get("channel_name", "Unknown Channel")
-        server_settings[channel_id] = get_server_settings(channel_id, channel_name)
-
-    for cid, settings in server_settings.items():
-        info = channel_infos.get(cid, {"server_name": "Unknown Server", "channel_name": "Unknown Channel"})
-        hapus_str = ("Langsung" if settings['delete_immediately'] else 
-                     (f"Dalam {settings['delete_bot_reply']} detik" if settings['delete_bot_reply'] and settings['delete_bot_reply'] > 0 else "Tidak"))
-        persona_str = f"Persona = {settings.get('persona', 'Tidak ada')}, " if settings.get('persona') else ""
-        log_message(
-            f"[Channel {cid} | Server: {info['server_name']} | Channel: {info['channel_name']}] "
-            f"Pengaturan: Gemini AI = {'Aktif' if settings['use_google_ai'] else 'Tidak'}, "
-            f"{persona_str}"
-            f"Bahasa = {settings['prompt_language'].upper()}, "
-            f"Membaca Pesan = {'Aktif' if settings['enable_read_message'] else 'Tidak'}, "
-            f"Delay Membaca = {settings['read_delay']} detik, "
-            f"Interval = {settings['delay_interval']} detik, "
-            f"Slow Mode = {'Aktif' if settings['use_slow_mode'] else 'Tidak'}, "
-            f"Reply = {'Ya' if settings['use_reply'] else 'Tidak'}, "
-            f"Hapus Pesan = {hapus_str}",
-            "INFO"
-        )
-
-    token_index = 0
-    for channel_id in channel_ids:
-        token = discord_tokens[token_index % len(discord_tokens)]
-        token_index += 1
-        bot_info = bot_accounts.get(token, {"username": "Unknown", "discriminator": "", "bot_id": "Unknown"})
-        thread = threading.Thread(
-            target=auto_reply,
-            args=(channel_id, server_settings[channel_id], token)
-        )
-        thread.daemon = True
-        thread.start()
-        log_message(f"[Channel {channel_id}] Bot aktif: {bot_info['username']}#{bot_info['discriminator']} (Token: {token[:4]}{'...' if len(token) > 4 else token})", "SUCCESS")
-
-    log_message("Bot sedang berjalan di beberapa server... Tekan CTRL+C untuk menghentikan.", "INFO")
-    while True:
-        time.sleep(10)
+def start_cleanup_thread():
+    def periodic_cleanup():
+        while True:
+            time.sleep(3600)  # Run cleanup every hour
+            cleanup_expired_conversations()
+            log_message("Cleaned up expired conversations", "INFO")
+    
+    cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+    cleanup_thread.start()
