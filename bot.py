@@ -143,19 +143,11 @@ def generate_language_specific_prompt(user_message, prompt_language, persona=Non
     if conversation_history and len(conversation_history) > 0:
         history_text = "Here's our conversation history (most recent last):\n"
         for exchange in conversation_history:
-            if prompt_language == 'id':
-                history_text += f"User: {exchange['user']}\nYou: {exchange['bot']}\n"
-            else:
-                history_text += f"User: {exchange['user']}\nYou: {exchange['bot']}\n"
+            history_text += f"User: {exchange['user']}\nYou: {exchange['bot']}\n"
         history_text += "\nRemember this context when replying. Keep your response conversational and natural.\n"
     
-    if prompt_language == 'id':
-        return f"{persona_prefix}{history_text}Balas pesan berikut dalam bahasa Indonesia, dengan mempertahankan konteks percakapan sebelumnya: {user_message}"
-    elif prompt_language == 'en':
-        return f"{persona_prefix}{history_text}Reply to the following message in English, maintaining the context of our previous conversation: {user_message}"
-    else:
-        log_message(f"Bahasa prompt '{prompt_language}' tidak valid. Pesan dilewati.", "WARNING")
-        return None
+    # Always use English regardless of prompt_language setting
+    return f"{persona_prefix}{history_text}Reply to the following message in English, maintaining the context of our previous conversation: {user_message}"
 
 def is_time_question(message):
     # List of patterns that indicate the user is asking for the time
@@ -178,10 +170,8 @@ def generate_random_time_response(prompt_language, persona=None):
         # If there's a persona, send the time info to the AI to format it in character
         google_api_key = get_random_api_key()
         
-        if prompt_language == 'id':
-            special_prompt = f"You are {persona}. Seseorang bertanya jam berapa sekarang. Katakan bahwa sekarang jam {random_time}. Jawab dengan gaya khas karaktermu dengan 1 kalimat."
-        else:
-            special_prompt = f"You are {persona}. Someone asked what time it is. Tell them it's {random_time} now. Answer in your character's style with 1 sentence."
+        # Always use English prompt regardless of prompt_language setting
+        special_prompt = f"You are {persona}. Someone asked what time it is. Tell them it's {random_time} now. Answer in your character's style with 1 sentence in English only."
             
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
@@ -196,10 +186,7 @@ def generate_random_time_response(prompt_language, persona=None):
             log_message(f"Error generating time response: {e}", "ERROR")
     
     # Fallback if persona processing fails or if no persona is specified
-    if prompt_language == 'id':
-        return f"Sekarang jam {random_time}."
-    else:
-        return f"It's {random_time}."
+    return f"It's {random_time}."
 
 def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None, conversation_history=None):
     global last_generated_text
@@ -214,7 +201,8 @@ def generate_reply(prompt, prompt_language, use_google_ai=True, persona=None, co
         lang_prompt = generate_language_specific_prompt(prompt, prompt_language, persona, conversation_history)
         if lang_prompt is None:
             return None
-        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat menggunakan bahasa kasual chatting di discord tanpa huruf kapital dan jangan selalu pakai emoticon"
+        # You can keep the instruction in Bahasa Indonesia while requesting English output
+        ai_prompt = f"{lang_prompt}\n\nBuatlah menjadi 1 kalimat dalam bahasa Inggris, menggunakan bahasa kasual chatting di discord tanpa huruf kapital"
         url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={google_api_key}'
         headers = {'Content-Type': 'application/json'}
         data = {'contents': [{'parts': [{'text': ai_prompt}]}]}
@@ -378,6 +366,40 @@ def should_process_message(message_data, bot_user_id):
     # If it's a standalone message with no mentions, process it
     return True
 
+def score_message_relevance(message, bot_user_id):
+    """Score a message for relevance, with higher scores indicating higher relevance."""
+    score = 0
+    
+    # Direct replies to the bot get highest priority
+    referenced_message = message.get('referenced_message')
+    if referenced_message and referenced_message.get('author', {}).get('id') == bot_user_id:
+        score += 10
+    
+    # Messages that mention the bot get high priority
+    if any(mention.get('id') == bot_user_id for mention in message.get('mentions', [])):
+        score += 8
+    
+    # Messages with question marks are likely questions
+    if '?' in message.get('content', ''):
+        score += 5
+    
+    # Longer messages might have more substance
+    content_length = len(message.get('content', ''))
+    if content_length > 20:
+        score += 3
+    elif content_length > 10:
+        score += 1
+    
+    # Check for keywords that might indicate the message is important
+    keywords = ["help", "question", "please", "thanks", "thank you", "tolong", "bantuan", "terima kasih"]
+    content = message.get('content', '').lower()
+    for keyword in keywords:
+        if keyword in content:
+            score += 2
+            break
+    
+    return score
+
 def auto_reply(channel_id, settings, token):
     headers = {'Authorization': token}
     if settings["use_google_ai"]:
@@ -392,48 +414,56 @@ def auto_reply(channel_id, settings, token):
         while True:
             prompt = None
             reply_to_id = None
+            relevant_message = None  # Store the most relevant message
+            
             log_message(f"[Channel {channel_id}] Menunggu {settings['read_delay']} detik sebelum membaca pesan...", "WAIT")
             time.sleep(settings["read_delay"])
             try:
-                response = requests.get(f'https://discord.com/api/v9/channels/{channel_id}/messages', headers=headers)
+                # Request multiple messages (10) instead of just the most recent one
+                response = requests.get(f'https://discord.com/api/v9/channels/{channel_id}/messages?limit=10', headers=headers)
                 response.raise_for_status()
                 messages = response.json()
+                
                 if messages:
-                    most_recent_message = messages[0]
-                    message_id = most_recent_message.get('id')
-                    message_type = most_recent_message.get('type', '')
+                    # Find the most relevant message
+                    highest_score = -1
                     
-                    if message_type != 8 and message_id not in processed_message_ids:
-                        # Use the new function instead of is_standalone_message
-                        if not should_process_message(most_recent_message, bot_user_id):
-                            log_message(f"[Channel {channel_id}] Pesan dilewati (tidak memenuhi kriteria).", "WARNING")
-                            processed_message_ids.add(message_id)
-                            continue
+                    for message in messages:
+                        message_id = message.get('id')
+                        if message_id not in processed_message_ids and should_process_message(message, bot_user_id):
+                            user_message = message.get('content', '').strip()
+                            attachments = message.get('attachments', [])
+                            
+                            if not attachments and is_valid_text_message(user_message):
+                                relevance_score = score_message_relevance(message, bot_user_id)
+                                log_message(f"[Channel {channel_id}] Message: '{user_message}' has relevance score: {relevance_score}", "INFO")
+                                if relevance_score > highest_score:
+                                    highest_score = relevance_score
+                                    relevant_message = message
+                    
+                    if relevant_message:
+                        message_id = relevant_message.get('id')
+                        user_message = relevant_message.get('content', '').strip()
                         
-                        user_message = most_recent_message.get('content', '').strip()
-                        attachments = most_recent_message.get('attachments', [])
+                        log_message(f"[Channel {channel_id}] Selected most relevant message: '{user_message}' (Score: {highest_score})", "INFO")
                         
-                        if attachments or not is_valid_text_message(user_message):
-                            log_message(f"[Channel {channel_id}] Pesan dilewati (bukan teks murni atau mengandung link/emoji).", "WARNING")
-                            processed_message_ids.add(message_id)
-                        else:
-                            log_message(f"[Channel {channel_id}] Received: {user_message}", "INFO")
-                            if settings["use_slow_mode"]:
-                                slow_mode_delay = get_slow_mode_delay(channel_id, token)
-                                log_message(f"[Channel {channel_id}] Slow mode aktif, menunggu {slow_mode_delay} detik...", "WAIT")
-                                time.sleep(slow_mode_delay)
-                            prompt = user_message
-                            reply_to_id = message_id
-                            processed_message_ids.add(message_id)
+                        if settings["use_slow_mode"]:
+                            slow_mode_delay = get_slow_mode_delay(channel_id, token)
+                            log_message(f"[Channel {channel_id}] Slow mode aktif, menunggu {slow_mode_delay} detik...", "WAIT")
+                            time.sleep(slow_mode_delay)
+                        
+                        prompt = user_message
+                        reply_to_id = message_id
+                        processed_message_ids.add(message_id)
                 else:
                     prompt = None
             except requests.exceptions.RequestException as e:
                 log_message(f"[Channel {channel_id}] Request error: {e}", "ERROR")
                 prompt = None
 
-            if prompt:
-                # Get the user ID from the message
-                user_id = most_recent_message.get('author', {}).get('id')
+            if prompt and relevant_message:
+                # Get the user ID from the selected message
+                user_id = relevant_message.get('author', {}).get('id')
                 
                 # Get conversation history for this user
                 conversation_history = get_conversation_history(user_id, channel_id)
@@ -444,7 +474,7 @@ def auto_reply(channel_id, settings, token):
                 if result is None:
                     log_message(f"[Channel {channel_id}] Bahasa prompt tidak valid. Pesan dilewati.", "WARNING")
                 else:
-                    response_text = result if result else "Maaf, tidak dapat membalas pesan."
+                    response_text = result if result else "Sorry, I couldn't reply to your message."
                     if response_text.strip().lower() == prompt.strip().lower():
                         log_message(f"[Channel {channel_id}] Balasan sama dengan pesan yang diterima. Tidak mengirim balasan.", "WARNING")
                     else:
@@ -550,19 +580,15 @@ def get_server_settings(channel_id, channel_name):
         if use_persona:
             persona = input("  Masukkan deskripsi persona (contoh: 'a helpful assistant', 'a medieval knight', etc): ").strip()
             
-        prompt_language = input("  Pilih bahasa prompt (en/id): ").strip().lower()
-        if prompt_language not in ["en", "id"]:
-            print("  Input tidak valid. Default ke 'id'.")
-            prompt_language = "id"
+        # Always use English, no need to ask
+        prompt_language = "en"
         enable_read_message = True
         read_delay = int(input("  Masukkan delay membaca pesan (detik): "))
         delay_interval = int(input("  Masukkan interval (detik) untuk setiap iterasi auto reply: "))
         use_slow_mode = input("  Gunakan slow mode? (y/n): ").strip().lower() == 'y'
     else:
-        prompt_language = input("  Pilih bahasa pesan dari file (en/id): ").strip().lower()
-        if prompt_language not in ["en", "id"]:
-            print("  Input tidak valid. Default ke 'id'.")
-            prompt_language = "id"
+        # Always use English for file messages too
+        prompt_language = "en"
         enable_read_message = False
         read_delay = 0
         delay_interval = int(input("  Masukkan delay (detik) untuk mengirim pesan dari file: "))
@@ -637,6 +663,10 @@ if __name__ == "__main__":
     
     # Print the conversation memory settings
     log_message(f"Conversation memory settings: Max length = {max_conversation_length}, Expiry = {conversation_expiry/60} minutes", "INFO")
+    
+    # Print language and multi-message processing information
+    log_message("Enhanced message selection enabled: Bot will analyze the last 10 messages and respond to the most relevant one", "INFO")
+    log_message("English-only mode enabled: Bot will always respond in English regardless of input language", "INFO")
 
     token_index = 0
     for channel_id in channel_ids:
