@@ -35,8 +35,7 @@
 
 13. Read 10 latest messages instead of omly the latest one
 
-14. bot2.py for english replies only
-
+14. make it english only
 
 # HOW TO USE ?
 
