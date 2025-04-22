@@ -29,9 +29,13 @@
 
 10. Create persona to the bot
 
-11. Remember chat history, 7 chats max for conversational context
+11. Remember chat history, 7 chat max for conversational context
 
-12. Answers random time when asked time-related questions 
+12. Answers random time when asked time-related questions
+
+13. Read 10 latest messages instead of omly the latest one
+
+14. bot2.py for english replies only
 
 
 # HOW TO USE ?
